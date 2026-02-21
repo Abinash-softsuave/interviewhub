@@ -55,6 +55,7 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(userRole === 'interviewer');
   const [screenShareActive, setScreenShareActive] = useState(false);
+  const [screenShareError, setScreenShareError] = useState('');
 
   useEffect(() => {
     let disposed = false;
@@ -167,29 +168,28 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
       let stream = screenStreamRef.current;
       if (!stream || stream.getVideoTracks().every((t) => t.readyState === 'ended')) {
         try {
+          setScreenShareError('');
           stream = await navigator.mediaDevices.getDisplayMedia({
             video: { displaySurface: 'monitor' } as MediaTrackConstraints,
             audio: false,
-            // @ts-expect-error Chrome-specific: hide tab/window options
-            selfBrowserSurface: 'exclude',
-            surfaceSwitching: 'exclude',
-            systemAudio: 'exclude',
-            monitorTypeSurfaces: 'include',
           });
           if (disposed) { stream.getTracks().forEach((t) => t.stop()); return; }
 
-          // Verify the user selected an entire screen, not a window/tab
+          // ENFORCE entire screen only — reject window/tab selections
           const videoTrack = stream.getVideoTracks()[0];
-          const settings = videoTrack.getSettings();
-          if (settings.displaySurface && settings.displaySurface !== 'monitor') {
-            log('User selected', settings.displaySurface, 'instead of entire screen — re-prompting');
+          const settings = videoTrack.getSettings() as MediaTrackSettings & { displaySurface?: string };
+          const surface = settings.displaySurface;
+          if (surface && surface !== 'monitor') {
+            log('Rejected screen share: selected', surface, '(must be entire screen)');
             stream.getTracks().forEach((t) => t.stop());
-            if (!disposed) setTimeout(() => startOrRestartScreenShare(), 500);
+            setScreenShareError('You must share your Entire Screen. Window and tab sharing are not allowed.');
+            if (!disposed) setTimeout(() => startOrRestartScreenShare(), 2500);
             return;
           }
 
           screenStreamRef.current = stream;
           setScreenShareActive(true);
+          setScreenShareError('');
 
           videoTrack.onended = () => {
             log('Screen share ended by user');
@@ -380,9 +380,16 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
       </div>
 
       {userRole === 'candidate' && (
-        <div className={`text-center text-xs py-1 rounded ${screenShareActive ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'}`}>
-          {screenShareActive ? 'Screen is being shared with interviewer' : 'Screen share required — please allow when prompted'}
-        </div>
+        <>
+          <div className={`text-center text-xs py-1 rounded ${screenShareActive ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'}`}>
+            {screenShareActive ? 'Screen is being shared with interviewer' : 'Screen share required — please allow when prompted'}
+          </div>
+          {screenShareError && (
+            <div className="text-center text-xs py-1.5 px-2 rounded bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 font-medium">
+              {screenShareError}
+            </div>
+          )}
+        </>
       )}
 
       <div className="flex items-center justify-center space-x-2">

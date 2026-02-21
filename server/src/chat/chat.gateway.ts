@@ -40,6 +40,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       socketId: client.id,
     });
     console.log(`${data.userName} (${data.role}) joined room ${data.interviewId}`);
+
+    // If interviewer joins, notify any waiting candidates so they can re-send request
+    if (data.role === 'interviewer') {
+      this.server.to(data.interviewId + ':waiting').emit('interviewer-in-room');
+      console.log(`Notified waiting candidates in ${data.interviewId}:waiting`);
+    }
   }
 
   @SubscribeMessage('leave-room')

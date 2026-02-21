@@ -66,16 +66,25 @@ export default function InterviewRoom() {
     } else {
       // Candidate requests to join — waits for approval
       setWaitingApproval(true);
-      s.emit('request-join', {
-        interviewId: id,
-        userId: user.id || user._id,
-        userName: user.name,
+
+      const sendJoinRequest = () => {
+        s.emit('request-join', {
+          interviewId: id,
+          userId: user.id || user._id,
+          userName: user.name,
+        });
+      };
+
+      sendJoinRequest();
+
+      // If interviewer joins after candidate, re-send the request
+      s.on('interviewer-in-room', () => {
+        sendJoinRequest();
       });
 
       s.on('join-approved', () => {
         setWaitingApproval(false);
         setAdmitted(true);
-        // Now actually join the room
         s.emit('join-room', {
           interviewId: id,
           userId: user.id || user._id,
@@ -93,6 +102,7 @@ export default function InterviewRoom() {
     return () => {
       s.emit('leave-room', { interviewId: id });
       s.off('join-request');
+      s.off('interviewer-in-room');
       s.off('join-approved');
       s.off('join-rejected');
       disconnectSocket();
