@@ -6,6 +6,7 @@ interface Props {
   interviewId: string;
   onRecordingUrl?: (url: string) => void;
   userRole?: string;
+  onScreenStream?: (stream: MediaStream | null) => void;
 }
 
 const ICE_SERVERS = {
@@ -15,11 +16,13 @@ const ICE_SERVERS = {
   ],
 };
 
-export default function VideoCall({ socket, interviewId, onRecordingUrl, userRole }: Props) {
+export default function VideoCall({ socket, interviewId, onRecordingUrl, userRole, onScreenStream }: Props) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
+  const screenPeerRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -27,6 +30,7 @@ export default function VideoCall({ socket, interviewId, onRecordingUrl, userRol
   const [isRecording, setIsRecording] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [screenShareActive, setScreenShareActive] = useState(false);
 
   const createPeer = useCallback(() => {
     const pc = new RTCPeerConnection(ICE_SERVERS);
@@ -60,6 +64,63 @@ export default function VideoCall({ socket, interviewId, onRecordingUrl, userRol
     return pc;
   }, [socket, interviewId]);
 
+  // Create a separate peer connection for screen sharing
+  const createScreenPeer = useCallback((isInitiator: boolean) => {
+    const pc = new RTCPeerConnection(ICE_SERVERS);
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit('screen-ice-candidate', { interviewId, candidate: event.candidate });
+      }
+    };
+
+    // Interviewer receives the screen stream
+    if (!isInitiator) {
+      pc.ontrack = (event) => {
+        onScreenStream?.(event.streams[0]);
+      };
+    }
+
+    screenPeerRef.current = pc;
+    return pc;
+  }, [socket, interviewId, onScreenStream]);
+
+  // Candidate: start screen share and send offer
+  const startScreenShare = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { cursor: 'always' } as MediaTrackConstraints,
+        audio: false,
+      });
+      screenStreamRef.current = stream;
+      setScreenShareActive(true);
+
+      // When candidate stops sharing from browser UI
+      stream.getVideoTracks()[0].onended = () => {
+        setScreenShareActive(false);
+        screenStreamRef.current = null;
+        screenPeerRef.current?.close();
+        screenPeerRef.current = null;
+        onScreenStream?.(null);
+        // Re-prompt screen share since it's forced
+        startScreenShare();
+      };
+
+      // Create screen peer and add track
+      const pc = createScreenPeer(true);
+      stream.getTracks().forEach((track) => {
+        pc.addTrack(track, stream);
+      });
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit('screen-offer', { interviewId, offer });
+    } catch {
+      console.warn('Screen share denied, retrying in 3 seconds...');
+      setTimeout(() => startScreenShare(), 3000);
+    }
+  }, [socket, interviewId, createScreenPeer, onScreenStream]);
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -78,6 +139,11 @@ export default function VideoCall({ socket, interviewId, onRecordingUrl, userRol
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       socket.emit('webrtc-offer', { interviewId, offer });
+
+      // Candidate: auto-start screen share when other user joins
+      if (userRole === 'candidate' && !screenShareActive) {
+        startScreenShare();
+      }
     });
 
     socket.on('webrtc-offer', async (data: { offer: RTCSessionDescriptionInit }) => {
@@ -100,15 +166,42 @@ export default function VideoCall({ socket, interviewId, onRecordingUrl, userRol
       }
     });
 
+    // Screen share signaling
+    socket.on('screen-offer', async (data: { offer: RTCSessionDescriptionInit }) => {
+      // Interviewer receives screen offer from candidate
+      const pc = createScreenPeer(false);
+      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit('screen-answer', { interviewId, answer });
+    });
+
+    socket.on('screen-answer', async (data: { answer: RTCSessionDescriptionInit }) => {
+      if (screenPeerRef.current) {
+        await screenPeerRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+      }
+    });
+
+    socket.on('screen-ice-candidate', async (data: { candidate: RTCIceCandidateInit }) => {
+      if (screenPeerRef.current) {
+        await screenPeerRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+      }
+    });
+
     return () => {
       socket.off('user-joined');
       socket.off('webrtc-offer');
       socket.off('webrtc-answer');
       socket.off('webrtc-ice-candidate');
+      socket.off('screen-offer');
+      socket.off('screen-answer');
+      socket.off('screen-ice-candidate');
       peerRef.current?.close();
+      screenPeerRef.current?.close();
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
+      screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     };
-  }, [socket, interviewId, createPeer]);
+  }, [socket, interviewId, createPeer, createScreenPeer, userRole, startScreenShare, screenShareActive]);
 
   const toggleMute = () => {
     if (localStreamRef.current) {
@@ -169,6 +262,13 @@ export default function VideoCall({ socket, interviewId, onRecordingUrl, userRol
           </span>
         </div>
       </div>
+
+      {/* Candidate screen share status */}
+      {userRole === 'candidate' && (
+        <div className={`text-center text-xs py-1 rounded ${screenShareActive ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'}`}>
+          {screenShareActive ? 'Screen is being shared with interviewer' : 'Screen share required — please allow when prompted'}
+        </div>
+      )}
 
       <div className="flex items-center justify-center space-x-2">
         <button

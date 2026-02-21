@@ -103,6 +103,40 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
+  // Screen share signaling
+  @SubscribeMessage('screen-offer')
+  handleScreenOffer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; offer: RTCSessionDescriptionInit },
+  ) {
+    client.to(data.interviewId).emit('screen-offer', {
+      offer: data.offer,
+      socketId: client.id,
+    });
+  }
+
+  @SubscribeMessage('screen-answer')
+  handleScreenAnswer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; answer: RTCSessionDescriptionInit },
+  ) {
+    client.to(data.interviewId).emit('screen-answer', {
+      answer: data.answer,
+      socketId: client.id,
+    });
+  }
+
+  @SubscribeMessage('screen-ice-candidate')
+  handleScreenIceCandidate(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; candidate: RTCIceCandidateInit },
+  ) {
+    client.to(data.interviewId).emit('screen-ice-candidate', {
+      candidate: data.candidate,
+      socketId: client.id,
+    });
+  }
+
   // Code editor sync
   @SubscribeMessage('code-change')
   handleCodeChange(
