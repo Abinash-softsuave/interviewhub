@@ -103,6 +103,19 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
+  // WebRTC readiness signaling
+  @SubscribeMessage('webrtc-ready')
+  handleWebrtcReady(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; userId: string },
+  ) {
+    client.to(data.interviewId).emit('webrtc-ready', {
+      userId: data.userId,
+      socketId: client.id,
+    });
+    console.log(`webrtc-ready from ${data.userId} in room ${data.interviewId}`);
+  }
+
   // Screen share signaling
   @SubscribeMessage('screen-offer')
   handleScreenOffer(
