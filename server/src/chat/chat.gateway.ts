@@ -1,0 +1,117 @@
+import {
+  WebSocketGateway,
+  WebSocketServer,
+  SubscribeMessage,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  MessageBody,
+  ConnectedSocket,
+} from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
+import { ChatService } from './chat.service';
+
+@WebSocketGateway({
+  cors: { origin: process.env.CLIENT_URL || 'http://localhost:5173', credentials: true },
+})
+export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
+  @WebSocketServer()
+  server: Server;
+
+  constructor(private chatService: ChatService) {}
+
+  handleConnection(client: Socket) {
+    console.log(`Client connected: ${client.id}`);
+  }
+
+  handleDisconnect(client: Socket) {
+    console.log(`Client disconnected: ${client.id}`);
+  }
+
+  @SubscribeMessage('join-room')
+  handleJoinRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; userId: string; userName: string },
+  ) {
+    client.join(data.interviewId);
+    client.to(data.interviewId).emit('user-joined', {
+      userId: data.userId,
+      userName: data.userName,
+      socketId: client.id,
+    });
+    console.log(`${data.userName} joined room ${data.interviewId}`);
+  }
+
+  @SubscribeMessage('leave-room')
+  handleLeaveRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string },
+  ) {
+    client.leave(data.interviewId);
+    client.to(data.interviewId).emit('user-left', { socketId: client.id });
+  }
+
+  @SubscribeMessage('chat-message')
+  async handleChatMessage(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; senderId: string; senderName: string; message: string },
+  ) {
+    const saved = await this.chatService.saveMessage({
+      interviewId: data.interviewId,
+      senderId: data.senderId,
+      message: data.message,
+    });
+
+    this.server.to(data.interviewId).emit('chat-message', {
+      _id: saved._id,
+      senderId: { _id: data.senderId, name: data.senderName },
+      message: data.message,
+      timestamp: saved.timestamp,
+    });
+  }
+
+  // WebRTC Signaling
+  @SubscribeMessage('webrtc-offer')
+  handleOffer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; offer: RTCSessionDescriptionInit },
+  ) {
+    client.to(data.interviewId).emit('webrtc-offer', {
+      offer: data.offer,
+      socketId: client.id,
+    });
+  }
+
+  @SubscribeMessage('webrtc-answer')
+  handleAnswer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; answer: RTCSessionDescriptionInit },
+  ) {
+    client.to(data.interviewId).emit('webrtc-answer', {
+      answer: data.answer,
+      socketId: client.id,
+    });
+  }
+
+  @SubscribeMessage('webrtc-ice-candidate')
+  handleIceCandidate(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; candidate: RTCIceCandidateInit },
+  ) {
+    client.to(data.interviewId).emit('webrtc-ice-candidate', {
+      candidate: data.candidate,
+      socketId: client.id,
+    });
+  }
+
+  // Code editor sync
+  @SubscribeMessage('code-change')
+  handleCodeChange(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; code: string; language: string },
+  ) {
+    client.to(data.interviewId).emit('code-change', {
+      code: data.code,
+      language: data.language,
+    });
+  }
+}
