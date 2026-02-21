@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Socket } from 'socket.io-client';
 
 interface Props {
@@ -9,7 +9,7 @@ interface Props {
   onScreenStream?: (stream: MediaStream | null) => void;
 }
 
-const ICE_SERVERS = {
+const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
@@ -25,6 +25,13 @@ export default function VideoCall({ socket, interviewId, onRecordingUrl, userRol
   const screenStreamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const makingOfferRef = useRef(false);
+
+  // Keep refs for callbacks so the effect doesn't depend on them
+  const onScreenStreamRef = useRef(onScreenStream);
+  onScreenStreamRef.current = onScreenStream;
+  const userRoleRef = useRef(userRole);
+  userRoleRef.current = userRole;
 
   const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -32,176 +39,231 @@ export default function VideoCall({ socket, interviewId, onRecordingUrl, userRol
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [screenShareActive, setScreenShareActive] = useState(false);
 
-  const createPeer = useCallback(() => {
-    const pc = new RTCPeerConnection(ICE_SERVERS);
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit('webrtc-ice-candidate', { interviewId, candidate: event.candidate });
-      }
-    };
-
-    pc.ontrack = (event) => {
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0];
-        setIsConnected(true);
-      }
-    };
-
-    pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
-        setIsConnected(false);
-      }
-    };
-
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => {
-        pc.addTrack(track, localStreamRef.current!);
-      });
-    }
-
-    peerRef.current = pc;
-    return pc;
-  }, [socket, interviewId]);
-
-  // Create a separate peer connection for screen sharing
-  const createScreenPeer = useCallback((isInitiator: boolean) => {
-    const pc = new RTCPeerConnection(ICE_SERVERS);
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit('screen-ice-candidate', { interviewId, candidate: event.candidate });
-      }
-    };
-
-    // Interviewer receives the screen stream
-    if (!isInitiator) {
-      pc.ontrack = (event) => {
-        onScreenStream?.(event.streams[0]);
-      };
-    }
-
-    screenPeerRef.current = pc;
-    return pc;
-  }, [socket, interviewId, onScreenStream]);
-
-  // Candidate: start screen share and send offer
-  const startScreenShare = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { cursor: 'always' } as MediaTrackConstraints,
-        audio: false,
-      });
-      screenStreamRef.current = stream;
-      setScreenShareActive(true);
-
-      // When candidate stops sharing from browser UI
-      stream.getVideoTracks()[0].onended = () => {
-        setScreenShareActive(false);
-        screenStreamRef.current = null;
-        screenPeerRef.current?.close();
-        screenPeerRef.current = null;
-        onScreenStream?.(null);
-        // Re-prompt screen share since it's forced
-        startScreenShare();
-      };
-
-      // Create screen peer and add track
-      const pc = createScreenPeer(true);
-      stream.getTracks().forEach((track) => {
-        pc.addTrack(track, stream);
-      });
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socket.emit('screen-offer', { interviewId, offer });
-    } catch {
-      console.warn('Screen share denied, retrying in 3 seconds...');
-      setTimeout(() => startScreenShare(), 3000);
-    }
-  }, [socket, interviewId, createScreenPeer, onScreenStream]);
-
   useEffect(() => {
-    const init = async () => {
+    let disposed = false;
+
+    // ---- Helper: create video peer connection ----
+    function createVideoPeer(): RTCPeerConnection {
+      // Close existing peer if any
+      if (peerRef.current) {
+        peerRef.current.close();
+      }
+
+      const pc = new RTCPeerConnection(ICE_SERVERS);
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          socket.emit('webrtc-ice-candidate', { interviewId, candidate: e.candidate });
+        }
+      };
+
+      pc.ontrack = (e) => {
+        if (remoteVideoRef.current && e.streams[0]) {
+          remoteVideoRef.current.srcObject = e.streams[0];
+          setIsConnected(true);
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+          setIsConnected(false);
+        }
+      };
+
+      // Add local tracks if available
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((track) => {
+          pc.addTrack(track, localStreamRef.current!);
+        });
+      }
+
+      peerRef.current = pc;
+      return pc;
+    }
+
+    // ---- Helper: create screen share peer connection ----
+    function createScreenPeer(isInitiator: boolean): RTCPeerConnection {
+      if (screenPeerRef.current) {
+        screenPeerRef.current.close();
+      }
+
+      const pc = new RTCPeerConnection(ICE_SERVERS);
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          socket.emit('screen-ice-candidate', { interviewId, candidate: e.candidate });
+        }
+      };
+
+      // Receiver (interviewer) gets the screen track
+      if (!isInitiator) {
+        pc.ontrack = (e) => {
+          onScreenStreamRef.current?.(e.streams[0]);
+        };
+      }
+
+      screenPeerRef.current = pc;
+      return pc;
+    }
+
+    // ---- Helper: candidate starts screen sharing ----
+    async function startScreenShare() {
+      if (disposed) return;
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            displaySurface: 'monitor',
+          } as MediaTrackConstraints,
+          audio: false,
+        });
+
+        if (disposed) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+
+        screenStreamRef.current = stream;
+        setScreenShareActive(true);
+
+        // Re-prompt if candidate stops from browser UI
+        stream.getVideoTracks()[0].onended = () => {
+          setScreenShareActive(false);
+          screenStreamRef.current = null;
+          if (screenPeerRef.current) {
+            screenPeerRef.current.close();
+            screenPeerRef.current = null;
+          }
+          onScreenStreamRef.current?.(null);
+          if (!disposed) startScreenShare();
+        };
+
+        // Build screen peer and send offer
+        const pc = createScreenPeer(true);
+        stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('screen-offer', { interviewId, offer });
+      } catch {
+        // User denied or error — retry after delay
+        if (!disposed) {
+          setTimeout(() => startScreenShare(), 3000);
+        }
+      }
+    }
+
+    // ---- 1. Get local camera/mic ----
+    async function init() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        if (disposed) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
         localStreamRef.current = stream;
-        if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = stream;
+        }
       } catch {
         console.warn('Camera/mic not available, continuing without media');
       }
-    };
+    }
 
-    init();
+    // ---- 2. Set up socket listeners (once) ----
 
-    socket.on('user-joined', async () => {
-      const pc = createPeer();
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socket.emit('webrtc-offer', { interviewId, offer });
+    // When the other user joins the room, we initiate the call
+    async function onUserJoined() {
+      if (makingOfferRef.current) return;
+      makingOfferRef.current = true;
+      try {
+        const pc = createVideoPeer();
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('webrtc-offer', { interviewId, offer });
+      } finally {
+        makingOfferRef.current = false;
+      }
 
-      // Candidate: auto-start screen share when other user joins
-      if (userRole === 'candidate' && !screenShareActive) {
+      // Candidate auto-shares screen when interviewer joins
+      if (userRoleRef.current === 'candidate') {
         startScreenShare();
       }
-    });
+    }
 
-    socket.on('webrtc-offer', async (data: { offer: RTCSessionDescriptionInit }) => {
-      const pc = createPeer();
+    async function onWebrtcOffer(data: { offer: RTCSessionDescriptionInit }) {
+      const pc = createVideoPeer();
       await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       socket.emit('webrtc-answer', { interviewId, answer });
-    });
 
-    socket.on('webrtc-answer', async (data: { answer: RTCSessionDescriptionInit }) => {
-      if (peerRef.current) {
-        await peerRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+      // Candidate auto-shares screen when receiving an offer
+      if (userRoleRef.current === 'candidate' && !screenStreamRef.current) {
+        startScreenShare();
       }
-    });
+    }
 
-    socket.on('webrtc-ice-candidate', async (data: { candidate: RTCIceCandidateInit }) => {
-      if (peerRef.current) {
-        await peerRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+    async function onWebrtcAnswer(data: { answer: RTCSessionDescriptionInit }) {
+      await peerRef.current?.setRemoteDescription(new RTCSessionDescription(data.answer));
+    }
+
+    async function onWebrtcIce(data: { candidate: RTCIceCandidateInit }) {
+      try {
+        await peerRef.current?.addIceCandidate(new RTCIceCandidate(data.candidate));
+      } catch {
+        // Ignore ICE errors for candidates arriving before remote description
       }
-    });
+    }
 
-    // Screen share signaling
-    socket.on('screen-offer', async (data: { offer: RTCSessionDescriptionInit }) => {
-      // Interviewer receives screen offer from candidate
+    // Screen share signaling (interviewer receives)
+    async function onScreenOffer(data: { offer: RTCSessionDescriptionInit }) {
       const pc = createScreenPeer(false);
       await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       socket.emit('screen-answer', { interviewId, answer });
-    });
+    }
 
-    socket.on('screen-answer', async (data: { answer: RTCSessionDescriptionInit }) => {
-      if (screenPeerRef.current) {
-        await screenPeerRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+    async function onScreenAnswer(data: { answer: RTCSessionDescriptionInit }) {
+      await screenPeerRef.current?.setRemoteDescription(new RTCSessionDescription(data.answer));
+    }
+
+    async function onScreenIce(data: { candidate: RTCIceCandidateInit }) {
+      try {
+        await screenPeerRef.current?.addIceCandidate(new RTCIceCandidate(data.candidate));
+      } catch {
+        // Ignore
       }
-    });
+    }
 
-    socket.on('screen-ice-candidate', async (data: { candidate: RTCIceCandidateInit }) => {
-      if (screenPeerRef.current) {
-        await screenPeerRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
-      }
-    });
+    // Register all listeners
+    socket.on('user-joined', onUserJoined);
+    socket.on('webrtc-offer', onWebrtcOffer);
+    socket.on('webrtc-answer', onWebrtcAnswer);
+    socket.on('webrtc-ice-candidate', onWebrtcIce);
+    socket.on('screen-offer', onScreenOffer);
+    socket.on('screen-answer', onScreenAnswer);
+    socket.on('screen-ice-candidate', onScreenIce);
 
+    // Start camera
+    init();
+
+    // ---- Cleanup ----
     return () => {
-      socket.off('user-joined');
-      socket.off('webrtc-offer');
-      socket.off('webrtc-answer');
-      socket.off('webrtc-ice-candidate');
-      socket.off('screen-offer');
-      socket.off('screen-answer');
-      socket.off('screen-ice-candidate');
+      disposed = true;
+      socket.off('user-joined', onUserJoined);
+      socket.off('webrtc-offer', onWebrtcOffer);
+      socket.off('webrtc-answer', onWebrtcAnswer);
+      socket.off('webrtc-ice-candidate', onWebrtcIce);
+      socket.off('screen-offer', onScreenOffer);
+      socket.off('screen-answer', onScreenAnswer);
+      socket.off('screen-ice-candidate', onScreenIce);
       peerRef.current?.close();
       screenPeerRef.current?.close();
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     };
-  }, [socket, interviewId, createPeer, createScreenPeer, userRole, startScreenShare, screenShareActive]);
+  }, [socket, interviewId]); // Only depend on socket & interviewId — stable values
 
   const toggleMute = () => {
     if (localStreamRef.current) {
