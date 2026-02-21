@@ -5,6 +5,7 @@ interface Props {
   socket: Socket;
   interviewId: string;
   onRecordingUrl?: (url: string) => void;
+  userRole?: string;
 }
 
 const ICE_SERVERS = {
@@ -14,7 +15,7 @@ const ICE_SERVERS = {
   ],
 };
 
-export default function VideoCall({ socket, interviewId, onRecordingUrl }: Props) {
+export default function VideoCall({ socket, interviewId, onRecordingUrl, userRole }: Props) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
@@ -183,15 +184,17 @@ export default function VideoCall({ socket, interviewId, onRecordingUrl }: Props
             )}
           </svg>
         </button>
-        <button
-          onClick={toggleVideo}
-          className={`p-2 rounded-full ${isVideoOff ? 'bg-red-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}`}
-          title={isVideoOff ? 'Turn on camera' : 'Turn off camera'}
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-        </button>
+        {userRole === 'interviewer' && (
+          <button
+            onClick={toggleVideo}
+            className={`p-2 rounded-full ${isVideoOff ? 'bg-red-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}`}
+            title={isVideoOff ? 'Turn on camera' : 'Turn off camera'}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          </button>
+        )}
         <button
           onClick={isRecording ? stopRecording : startRecording}
           className={`px-3 py-1.5 rounded-full text-xs font-medium ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}`}

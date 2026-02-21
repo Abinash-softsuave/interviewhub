@@ -102,7 +102,7 @@ export default function InterviewRoom() {
         {/* Left panel - Video */}
         <div className="w-80 border-r border-gray-200 dark:border-gray-700 flex flex-col">
           <div className="p-3 flex-shrink-0">
-            <VideoCall socket={socket} interviewId={id} onRecordingUrl={handleRecordingUrl} />
+            <VideoCall socket={socket} interviewId={id} onRecordingUrl={handleRecordingUrl} userRole={user?.role} />
           </div>
           {/* Chat below video */}
           <div className="flex-1 min-h-0 p-3 pt-0">
