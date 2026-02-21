@@ -53,7 +53,7 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
   const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(userRole === 'interviewer');
   const [screenShareActive, setScreenShareActive] = useState(false);
 
   useEffect(() => {
@@ -71,7 +71,14 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
         if (disposed) { stream.getTracks().forEach((t) => t.stop()); resolveMedia!(); return; }
         localStreamRef.current = stream;
         if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-        log('Camera/mic acquired');
+
+        // Interviewer: camera off by default
+        if (userRoleRef.current === 'interviewer') {
+          stream.getVideoTracks().forEach((t) => (t.enabled = false));
+          log('Camera/mic acquired (camera OFF by default for interviewer)');
+        } else {
+          log('Camera/mic acquired');
+        }
       } catch (err) {
         log('Camera/mic failed:', err);
       }
@@ -163,13 +170,28 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
           stream = await navigator.mediaDevices.getDisplayMedia({
             video: { displaySurface: 'monitor' } as MediaTrackConstraints,
             audio: false,
+            // @ts-expect-error Chrome-specific: hide tab/window options
+            selfBrowserSurface: 'exclude',
+            surfaceSwitching: 'exclude',
+            systemAudio: 'exclude',
+            monitorTypeSurfaces: 'include',
           });
           if (disposed) { stream.getTracks().forEach((t) => t.stop()); return; }
+
+          // Verify the user selected an entire screen, not a window/tab
+          const videoTrack = stream.getVideoTracks()[0];
+          const settings = videoTrack.getSettings();
+          if (settings.displaySurface && settings.displaySurface !== 'monitor') {
+            log('User selected', settings.displaySurface, 'instead of entire screen — re-prompting');
+            stream.getTracks().forEach((t) => t.stop());
+            if (!disposed) setTimeout(() => startOrRestartScreenShare(), 500);
+            return;
+          }
 
           screenStreamRef.current = stream;
           setScreenShareActive(true);
 
-          stream.getVideoTracks()[0].onended = () => {
+          videoTrack.onended = () => {
             log('Screen share ended by user');
             setScreenShareActive(false);
             screenStreamRef.current = null;
