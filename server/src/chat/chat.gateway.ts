@@ -30,15 +30,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('join-room')
   handleJoinRoom(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { interviewId: string; userId: string; userName: string },
+    @MessageBody() data: { interviewId: string; userId: string; userName: string; role: string },
   ) {
     client.join(data.interviewId);
     client.to(data.interviewId).emit('user-joined', {
       userId: data.userId,
       userName: data.userName,
+      role: data.role,
       socketId: client.id,
     });
-    console.log(`${data.userName} joined room ${data.interviewId}`);
+    console.log(`${data.userName} (${data.role}) joined room ${data.interviewId}`);
   }
 
   @SubscribeMessage('leave-room')
@@ -50,6 +51,46 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client.to(data.interviewId).emit('user-left', { socketId: client.id });
   }
 
+  // ---- Join approval flow ----
+  @SubscribeMessage('request-join')
+  handleRequestJoin(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; userId: string; userName: string },
+  ) {
+    // Candidate requests to join — forward to interviewer in the room
+    client.join(data.interviewId + ':waiting');
+    client.to(data.interviewId).emit('join-request', {
+      userId: data.userId,
+      userName: data.userName,
+      socketId: client.id,
+    });
+    console.log(`Join request from ${data.userName} for room ${data.interviewId}`);
+  }
+
+  @SubscribeMessage('approve-join')
+  handleApproveJoin(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; candidateSocketId: string; candidateUserId: string },
+  ) {
+    // Interviewer approves — notify the candidate
+    this.server.to(data.interviewId + ':waiting').emit('join-approved', {
+      interviewId: data.interviewId,
+    });
+    console.log(`Join approved for room ${data.interviewId}`);
+  }
+
+  @SubscribeMessage('reject-join')
+  handleRejectJoin(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; candidateSocketId: string },
+  ) {
+    this.server.to(data.interviewId + ':waiting').emit('join-rejected', {
+      interviewId: data.interviewId,
+    });
+    console.log(`Join rejected for room ${data.interviewId}`);
+  }
+
+  // ---- Chat ----
   @SubscribeMessage('chat-message')
   async handleChatMessage(
     @ConnectedSocket() client: Socket,
@@ -69,7 +110,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
-  // WebRTC Signaling
+  // ---- WebRTC Signaling ----
   @SubscribeMessage('webrtc-offer')
   handleOffer(
     @ConnectedSocket() client: Socket,
@@ -103,7 +144,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
-  // WebRTC readiness signaling
   @SubscribeMessage('webrtc-ready')
   handleWebrtcReady(
     @ConnectedSocket() client: Socket,
@@ -116,7 +156,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     console.log(`webrtc-ready from ${data.userId} in room ${data.interviewId}`);
   }
 
-  // Screen share signaling
+  // ---- Screen share signaling ----
   @SubscribeMessage('screen-offer')
   handleScreenOffer(
     @ConnectedSocket() client: Socket,
@@ -150,7 +190,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
-  // Code editor sync
+  // ---- Code editor sync ----
   @SubscribeMessage('code-change')
   handleCodeChange(
     @ConnectedSocket() client: Socket,

@@ -71,7 +71,7 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
         if (disposed) { stream.getTracks().forEach((t) => t.stop()); resolveMedia!(); return; }
         localStreamRef.current = stream;
         if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-        log('Camera/mic acquired, tracks:', stream.getTracks().map((t) => t.kind));
+        log('Camera/mic acquired');
       } catch (err) {
         log('Camera/mic failed:', err);
       }
@@ -80,20 +80,13 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
 
     // ---- Helpers ----
     function createVideoPeer(): RTCPeerConnection {
-      if (peerRef.current) {
-        peerRef.current.close();
-        peerRef.current = null;
-      }
+      if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
       pendingIceCandidates.current = [];
-
       const pc = new RTCPeerConnection(ICE_SERVERS);
 
       pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          socket.emit('webrtc-ice-candidate', { interviewId, candidate: e.candidate });
-        }
+        if (e.candidate) socket.emit('webrtc-ice-candidate', { interviewId, candidate: e.candidate });
       };
-
       pc.ontrack = (e) => {
         log('Received remote track:', e.track.kind);
         if (remoteVideoRef.current && e.streams[0]) {
@@ -101,65 +94,46 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
           setIsConnected(true);
         }
       };
-
       pc.oniceconnectionstatechange = () => {
         log('ICE state:', pc.iceConnectionState);
         const s = pc.iceConnectionState;
         if (s === 'connected' || s === 'completed') setIsConnected(true);
         if (s === 'disconnected' || s === 'failed') setIsConnected(false);
       };
+      pc.onconnectionstatechange = () => log('Connection state:', pc.connectionState);
 
-      pc.onconnectionstatechange = () => {
-        log('Connection state:', pc.connectionState);
-      };
-
-      // Add local tracks if available
       if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach((track) => {
-          pc.addTrack(track, localStreamRef.current!);
-        });
-        log('Added local tracks to peer:', localStreamRef.current.getTracks().length);
+        localStreamRef.current.getTracks().forEach((track) => pc.addTrack(track, localStreamRef.current!));
+        log('Added local tracks:', localStreamRef.current.getTracks().length);
       } else {
-        log('WARNING: No local stream available when creating peer');
+        log('WARNING: No local stream when creating peer');
       }
-
       peerRef.current = pc;
       return pc;
     }
 
     function createScreenPeer(isInitiator: boolean): RTCPeerConnection {
-      if (screenPeerRef.current) {
-        screenPeerRef.current.close();
-        screenPeerRef.current = null;
-      }
+      if (screenPeerRef.current) { screenPeerRef.current.close(); screenPeerRef.current = null; }
       pendingScreenIceCandidates.current = [];
-
       const pc = new RTCPeerConnection(ICE_SERVERS);
 
       pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          socket.emit('screen-ice-candidate', { interviewId, candidate: e.candidate });
-        }
+        if (e.candidate) socket.emit('screen-ice-candidate', { interviewId, candidate: e.candidate });
       };
-
       if (!isInitiator) {
         pc.ontrack = (e) => {
           log('Received screen share track');
           onScreenStreamRef.current?.(e.streams[0]);
         };
       }
-
-      pc.oniceconnectionstatechange = () => {
-        log('Screen ICE state:', pc.iceConnectionState);
-      };
-
+      pc.oniceconnectionstatechange = () => log('Screen ICE state:', pc.iceConnectionState);
       screenPeerRef.current = pc;
       return pc;
     }
 
     async function flushIceCandidates() {
-      if (peerRef.current && peerRef.current.remoteDescription && pendingIceCandidates.current.length > 0) {
-        log('Flushing', pendingIceCandidates.current.length, 'buffered ICE candidates');
+      if (peerRef.current?.remoteDescription && pendingIceCandidates.current.length > 0) {
+        log('Flushing', pendingIceCandidates.current.length, 'ICE candidates');
         for (const c of pendingIceCandidates.current) {
           try { await peerRef.current.addIceCandidate(new RTCIceCandidate(c)); } catch { /* ignore */ }
         }
@@ -168,8 +142,8 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
     }
 
     async function flushScreenIceCandidates() {
-      if (screenPeerRef.current && screenPeerRef.current.remoteDescription && pendingScreenIceCandidates.current.length > 0) {
-        log('Flushing', pendingScreenIceCandidates.current.length, 'buffered screen ICE candidates');
+      if (screenPeerRef.current?.remoteDescription && pendingScreenIceCandidates.current.length > 0) {
+        log('Flushing', pendingScreenIceCandidates.current.length, 'screen ICE candidates');
         for (const c of pendingScreenIceCandidates.current) {
           try { await screenPeerRef.current.addIceCandidate(new RTCIceCandidate(c)); } catch { /* ignore */ }
         }
@@ -177,46 +151,52 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
       }
     }
 
-    async function startScreenShare() {
-      if (disposed) return;
-      try {
-        log('Requesting screen share (entire screen)...');
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { displaySurface: 'monitor' } as MediaTrackConstraints,
-          audio: false,
-        });
-        if (disposed) { stream.getTracks().forEach((t) => t.stop()); return; }
+    // ---- Screen share: always create a fresh peer and send offer ----
+    async function startOrRestartScreenShare() {
+      if (disposed || userRoleRef.current !== 'candidate') return;
+      log('Starting/restarting screen share...');
 
-        screenStreamRef.current = stream;
-        setScreenShareActive(true);
-        log('Screen share acquired');
+      // If we already have a screen stream, reuse it; otherwise prompt
+      let stream = screenStreamRef.current;
+      if (!stream || stream.getVideoTracks().every((t) => t.readyState === 'ended')) {
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { displaySurface: 'monitor' } as MediaTrackConstraints,
+            audio: false,
+          });
+          if (disposed) { stream.getTracks().forEach((t) => t.stop()); return; }
 
-        stream.getVideoTracks()[0].onended = () => {
-          log('Screen share ended by user, re-prompting...');
-          setScreenShareActive(false);
-          screenStreamRef.current = null;
-          if (screenPeerRef.current) { screenPeerRef.current.close(); screenPeerRef.current = null; }
-          onScreenStreamRef.current?.(null);
-          if (!disposed) startScreenShare();
-        };
+          screenStreamRef.current = stream;
+          setScreenShareActive(true);
 
-        const pc = createScreenPeer(true);
-        stream.getTracks().forEach((t) => pc.addTrack(t, stream));
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        log('Sending screen-offer');
-        socket.emit('screen-offer', { interviewId, offer });
-      } catch (err) {
-        log('Screen share failed:', err);
-        if (!disposed) setTimeout(() => startScreenShare(), 3000);
+          stream.getVideoTracks()[0].onended = () => {
+            log('Screen share ended by user');
+            setScreenShareActive(false);
+            screenStreamRef.current = null;
+            if (screenPeerRef.current) { screenPeerRef.current.close(); screenPeerRef.current = null; }
+            onScreenStreamRef.current?.(null);
+            if (!disposed) startOrRestartScreenShare();
+          };
+        } catch (err) {
+          log('Screen share denied:', err);
+          if (!disposed) setTimeout(() => startOrRestartScreenShare(), 3000);
+          return;
+        }
       }
+
+      // Create fresh screen peer and send offer
+      const pc = createScreenPeer(true);
+      stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      log('Sending screen-offer');
+      socket.emit('screen-offer', { interviewId, offer });
     }
 
     // ---- 2. Socket event handlers ----
 
-    // When the OTHER user signals they're ready for WebRTC, we initiate
     async function onWebrtcReady() {
-      log('Received webrtc-ready from other user, initiating call...');
+      log('Received webrtc-ready, initiating call...');
       await mediaReady;
       if (disposed) return;
 
@@ -225,6 +205,11 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
       await pc.setLocalDescription(offer);
       log('Sending webrtc-offer');
       socket.emit('webrtc-offer', { interviewId, offer });
+
+      // Candidate: start screen share when we initiate the call
+      if (userRoleRef.current === 'candidate') {
+        setTimeout(() => startOrRestartScreenShare(), 500);
+      }
     }
 
     async function onWebrtcOffer(data: { offer: RTCSessionDescriptionInit }) {
@@ -240,9 +225,9 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
       log('Sending webrtc-answer');
       socket.emit('webrtc-answer', { interviewId, answer });
 
-      // Candidate starts screen share after video handshake
-      if (userRoleRef.current === 'candidate' && !screenStreamRef.current) {
-        startScreenShare();
+      // Candidate: start screen share when we answer a call
+      if (userRoleRef.current === 'candidate') {
+        setTimeout(() => startOrRestartScreenShare(), 500);
       }
     }
 
@@ -255,10 +240,9 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
     }
 
     async function onWebrtcIce(data: { candidate: RTCIceCandidateInit }) {
-      if (peerRef.current && peerRef.current.remoteDescription) {
+      if (peerRef.current?.remoteDescription) {
         try { await peerRef.current.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch { /* ignore */ }
       } else {
-        // Buffer candidates until remote description is set
         pendingIceCandidates.current.push(data.candidate);
       }
     }
@@ -284,14 +268,14 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
     }
 
     async function onScreenIce(data: { candidate: RTCIceCandidateInit }) {
-      if (screenPeerRef.current && screenPeerRef.current.remoteDescription) {
+      if (screenPeerRef.current?.remoteDescription) {
         try { await screenPeerRef.current.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch { /* ignore */ }
       } else {
         pendingScreenIceCandidates.current.push(data.candidate);
       }
     }
 
-    // ---- 3. Register listeners FIRST, then signal readiness ----
+    // ---- 3. Register listeners, then signal readiness ----
     socket.on('webrtc-ready', onWebrtcReady);
     socket.on('webrtc-offer', onWebrtcOffer);
     socket.on('webrtc-answer', onWebrtcAnswer);
@@ -302,7 +286,6 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
 
     log('All listeners registered');
 
-    // ---- 4. After media ready, signal to room that we're ready ----
     mediaReady.then(() => {
       if (disposed) return;
       log('Media ready, emitting webrtc-ready');

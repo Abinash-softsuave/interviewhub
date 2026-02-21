@@ -19,6 +19,12 @@ export default function InterviewRoom() {
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const screenVideoRef = useRef<HTMLVideoElement>(null);
 
+  // Join approval state
+  const [admitted, setAdmitted] = useState(false);
+  const [waitingApproval, setWaitingApproval] = useState(false);
+  const [joinRejected, setJoinRejected] = useState(false);
+  const [joinRequest, setJoinRequest] = useState<{ userId: string; userName: string; socketId: string } | null>(null);
+
   useEffect(() => {
     if (!id || !user) return;
 
@@ -27,7 +33,6 @@ export default function InterviewRoom() {
         const { data } = await getInterview(id);
         setInterview(data);
 
-        // Set to ongoing if scheduled
         if (data.status === 'scheduled') {
           await updateInterview(id, { status: 'ongoing' });
         }
@@ -44,17 +49,76 @@ export default function InterviewRoom() {
     const s = connectSocket();
     setSocket(s);
 
-    s.emit('join-room', {
-      interviewId: id,
-      userId: user.id || user._id,
-      userName: user.name,
-    });
+    if (user.role === 'interviewer') {
+      // Interviewer joins directly
+      s.emit('join-room', {
+        interviewId: id,
+        userId: user.id || user._id,
+        userName: user.name,
+        role: user.role,
+      });
+      setAdmitted(true);
+
+      // Listen for candidate join requests
+      s.on('join-request', (data: { userId: string; userName: string; socketId: string }) => {
+        setJoinRequest(data);
+      });
+    } else {
+      // Candidate requests to join — waits for approval
+      setWaitingApproval(true);
+      s.emit('request-join', {
+        interviewId: id,
+        userId: user.id || user._id,
+        userName: user.name,
+      });
+
+      s.on('join-approved', () => {
+        setWaitingApproval(false);
+        setAdmitted(true);
+        // Now actually join the room
+        s.emit('join-room', {
+          interviewId: id,
+          userId: user.id || user._id,
+          userName: user.name,
+          role: user.role,
+        });
+      });
+
+      s.on('join-rejected', () => {
+        setWaitingApproval(false);
+        setJoinRejected(true);
+      });
+    }
 
     return () => {
       s.emit('leave-room', { interviewId: id });
+      s.off('join-request');
+      s.off('join-approved');
+      s.off('join-rejected');
       disconnectSocket();
     };
   }, [id, user, navigate]);
+
+  const handleApprove = () => {
+    if (socket && id && joinRequest) {
+      socket.emit('approve-join', {
+        interviewId: id,
+        candidateSocketId: joinRequest.socketId,
+        candidateUserId: joinRequest.userId,
+      });
+      setJoinRequest(null);
+    }
+  };
+
+  const handleReject = () => {
+    if (socket && id && joinRequest) {
+      socket.emit('reject-join', {
+        interviewId: id,
+        candidateSocketId: joinRequest.socketId,
+      });
+      setJoinRequest(null);
+    }
+  };
 
   const handleScreenStream = useCallback((stream: MediaStream | null) => {
     setScreenStream(stream);
@@ -72,10 +136,55 @@ export default function InterviewRoom() {
     }
   };
 
+  // Loading state
   if (loading || !socket || !id) {
     return (
       <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
         <div className="animate-spin w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
+  // Candidate: rejected
+  if (joinRejected) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 max-w-md text-center">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+            <svg className="w-8 h-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Join Request Declined</h2>
+          <p className="text-gray-500 dark:text-gray-400 mb-6">The interviewer has declined your request to join this interview.</p>
+          <button
+            onClick={() => navigate('/dashboard')}
+            className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
+          >
+            Back to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Candidate: waiting for approval
+  if (waitingApproval && !admitted) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 max-w-md text-center">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
+            <div className="animate-spin w-8 h-8 border-4 border-primary-500 border-t-transparent rounded-full" />
+          </div>
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Waiting for Approval</h2>
+          <p className="text-gray-500 dark:text-gray-400 mb-6">The interviewer will let you in shortly. Please wait...</p>
+          <button
+            onClick={() => navigate('/dashboard')}
+            className="px-4 py-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors text-sm"
+          >
+            Cancel and go back
+          </button>
+        </div>
       </div>
     );
   }
@@ -108,6 +217,37 @@ export default function InterviewRoom() {
           )}
         </div>
       </div>
+
+      {/* Join request notification for interviewer */}
+      {joinRequest && (
+        <div className="bg-blue-50 dark:bg-blue-900/20 border-b border-blue-200 dark:border-blue-800 px-4 py-3 flex items-center justify-between animate-pulse">
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-semibold text-sm">
+              {joinRequest.userName.charAt(0).toUpperCase()}
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-900 dark:text-white">
+                {joinRequest.userName} wants to join the interview
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Candidate is waiting for your approval</p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={handleReject}
+              className="px-4 py-1.5 text-sm font-medium text-red-600 bg-red-100 dark:bg-red-900/30 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors"
+            >
+              Decline
+            </button>
+            <button
+              onClick={handleApprove}
+              className="px-4 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors"
+            >
+              Admit
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main content */}
       <div className="flex-1 flex min-h-0">
