@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { Injectable, BadRequestException, UnauthorizedException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { UsersService } from '../users/users.service';
@@ -7,6 +7,8 @@ import { LoginDto } from './dto/login.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
@@ -16,14 +18,19 @@ export class AuthService {
     const existing = await this.usersService.findByEmail(dto.email);
     if (existing) throw new BadRequestException('Email already registered');
 
-    const hashed = await bcrypt.hash(dto.password, 12);
-    const user = await this.usersService.create({ ...dto, password: hashed });
+    try {
+      const hashed = await bcrypt.hash(dto.password, 12);
+      const user = await this.usersService.create({ ...dto, password: hashed });
 
-    const token = this.generateToken(user);
-    return {
-      user: { id: user._id, name: user.name, email: user.email, role: user.role },
-      token,
-    };
+      const token = this.generateToken(user);
+      return {
+        user: { id: user._id, name: user.name, email: user.email, role: user.role },
+        token,
+      };
+    } catch (error) {
+      this.logger.error('Registration failed', error.stack || error.message);
+      throw error;
+    }
   }
 
   async login(dto: LoginDto) {
