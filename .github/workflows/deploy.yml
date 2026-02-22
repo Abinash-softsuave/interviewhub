@@ -22,6 +22,9 @@ jobs:
 
       - run: npm ci
       - run: npm run build
+        env:
+          VITE_API_URL: https://interviewhub-api.onrender.com/api
+          VITE_SOCKET_URL: https://interviewhub-api.onrender.com
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
@@ -34,6 +37,14 @@ jobs:
   deploy-backend:
     name: Deploy Backend (Render)
     runs-on: ubuntu-latest
+    if: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' }}
     steps:
       - name: Trigger Render Deploy
-        run: curl -s "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+        env:
+          RENDER_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -n "$RENDER_HOOK" ]; then
+            curl -s "$RENDER_HOOK"
+          else
+            echo "RENDER_DEPLOY_HOOK_URL not set, skipping backend deploy"
+          fi
