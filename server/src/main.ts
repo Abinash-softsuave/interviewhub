@@ -19,9 +19,7 @@ async function bootstrap() {
     }),
   );
 
-  app.setGlobalPrefix('api');
-
-  // Swagger API documentation
+  // Swagger API documentation (setup BEFORE global prefix so route is /api/docs)
   const config = new DocumentBuilder()
     .setTitle('InterviewHub API')
     .setDescription(
@@ -43,6 +41,8 @@ async function bootstrap() {
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
+  app.setGlobalPrefix('api');
+
   SwaggerModule.setup('api/docs', app, document, {
     customSiteTitle: 'InterviewHub API Docs',
     customCss: '.swagger-ui .topbar { display: none }',
