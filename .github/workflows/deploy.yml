@@ -37,7 +37,6 @@ jobs:
   deploy-backend:
     name: Deploy Backend (Render)
     runs-on: ubuntu-latest
-    if: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' }}
     steps:
       - name: Trigger Render Deploy
         env:
