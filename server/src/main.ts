@@ -1,7 +1,9 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import * as bcrypt from 'bcryptjs';
 import { AppModule } from './app.module';
+import { UsersService } from './users/users.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { logger: ['error', 'warn', 'log', 'debug', 'verbose'] });
@@ -58,5 +60,15 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`Server running on http://localhost:${port}`);
   console.log(`Swagger docs: http://localhost:${port}/api/docs`);
+
+  // Seed default admin account
+  const usersService = app.get(UsersService);
+  const adminEmail = 'admin@ss.com';
+  const existing = await usersService.findByEmail(adminEmail);
+  if (!existing) {
+    const hashed = await bcrypt.hash('123456', 12);
+    await usersService.create({ name: 'Admin', email: adminEmail, password: hashed, role: 'admin' });
+    console.log('Default admin seeded: admin@ss.com / 123456');
+  }
 }
 bootstrap();

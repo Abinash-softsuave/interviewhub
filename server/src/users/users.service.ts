@@ -26,4 +26,8 @@ export class UsersService {
   async findByRole(role: string): Promise<UserDocument[]> {
     return this.userModel.find({ role }).select('-password');
   }
+
+  async delete(id: string): Promise<UserDocument | null> {
+    return this.userModel.findByIdAndDelete(id);
+  }
 }

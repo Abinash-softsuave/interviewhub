@@ -33,6 +33,11 @@ export const login = (data: { email: string; password: string }) =>
 export const getUsers = (role?: string) =>
   api.get('/users', { params: role ? { role } : {} });
 
+export const createUser = (data: { name: string; email: string; password: string; role: string }) =>
+  api.post('/users', data);
+
+export const deleteUser = (id: string) => api.delete(`/users/${id}`);
+
 // Interviews
 export const createInterview = (data: any) => api.post('/interviews', data);
 export const getInterviews = () => api.get('/interviews');

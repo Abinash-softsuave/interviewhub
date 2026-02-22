@@ -33,7 +33,7 @@ export default function Dashboard() {
       setInterviews(intRes.data);
       setAnalytics(analyticsRes.data);
 
-      if (user?.role === 'interviewer') {
+      if ((user?.role === 'interviewer' || user?.role === 'admin')) {
         const [candRes, intrvRes] = await Promise.all([
           getUsers('candidate'),
           getUsers('interviewer'),
@@ -118,7 +118,7 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">My Interviews</h1>
-        {user?.role === 'interviewer' && (
+        {(user?.role === 'interviewer' || user?.role === 'admin') && (
           <button
             onClick={() => setShowCreate(!showCreate)}
             className="px-4 py-2 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700 text-sm"
@@ -200,7 +200,7 @@ export default function Dashboard() {
         <div className="text-center py-16 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
           <div className="text-gray-400 dark:text-gray-500 text-lg">No interviews yet</div>
           <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">
-            {user?.role === 'interviewer' ? 'Create one to get started' : 'Wait for an interviewer to schedule one'}
+            {(user?.role === 'interviewer' || user?.role === 'admin') ? 'Create one to get started' : 'Wait for an interviewer to schedule one'}
           </p>
         </div>
       ) : (
@@ -250,7 +250,7 @@ export default function Dashboard() {
                   >
                     {interview.status === 'completed' ? 'View' : 'Join'}
                   </Link>
-                  {user?.role === 'interviewer' && interview.status !== 'completed' && (
+                  {(user?.role === 'interviewer' || user?.role === 'admin') && interview.status !== 'completed' && (
                     <Link
                       to={`/feedback/${interview._id}`}
                       className="px-3 py-1.5 text-sm bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded-lg hover:bg-purple-100 font-medium"
@@ -258,7 +258,7 @@ export default function Dashboard() {
                       Feedback
                     </Link>
                   )}
-                  {user?.role === 'interviewer' && (
+                  {(user?.role === 'interviewer' || user?.role === 'admin') && (
                     <button
                       onClick={() => handleDelete(interview._id)}
                       disabled={deletingId === interview._id}

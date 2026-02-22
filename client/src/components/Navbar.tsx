@@ -45,6 +45,11 @@ export default function Navbar() {
                 <Link to="/dashboard" className="text-gray-700 dark:text-gray-300 hover:text-primary-600 dark:hover:text-primary-400 font-medium">
                   Dashboard
                 </Link>
+                {user?.role === 'admin' && (
+                  <Link to="/admin/users" className="text-gray-700 dark:text-gray-300 hover:text-primary-600 dark:hover:text-primary-400 font-medium">
+                    Manage Users
+                  </Link>
+                )}
                 <div className="flex items-center space-x-3">
                   <span className="text-sm text-gray-500 dark:text-gray-400">
                     {user?.name}
@@ -64,9 +69,6 @@ export default function Navbar() {
               <div className="flex items-center space-x-2">
                 <Link to="/login" className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-primary-600">
                   Login
-                </Link>
-                <Link to="/register" className="px-4 py-2 text-sm font-medium bg-primary-600 text-white rounded-lg hover:bg-primary-700">
-                  Register
                 </Link>
               </div>
             )}

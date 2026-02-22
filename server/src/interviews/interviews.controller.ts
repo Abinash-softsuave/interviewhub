@@ -16,7 +16,7 @@ export class InterviewsController {
   constructor(private interviewsService: InterviewsService) {}
 
   @Post()
-  @Roles('interviewer')
+  @Roles('interviewer', 'admin')
   @ApiOperation({ summary: 'Create interview', description: 'Schedule a new interview (interviewer role only)' })
   @ApiResponse({ status: 201, description: 'Interview created' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -66,7 +66,7 @@ export class InterviewsController {
   }
 
   @Delete(':id')
-  @Roles('interviewer')
+  @Roles('interviewer', 'admin')
   @ApiOperation({ summary: 'Delete interview', description: 'Permanently delete an interview (interviewer role only)' })
   @ApiParam({ name: 'id', description: 'Interview ObjectId' })
   @ApiResponse({ status: 200, description: 'Interview deleted' })

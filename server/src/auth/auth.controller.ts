@@ -1,5 +1,5 @@
-import { Controller, Post, Body, HttpException, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
+import { Controller, Post, Body, Headers, HttpException, HttpStatus, ForbiddenException } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiHeader } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -29,6 +29,20 @@ export class AuthController {
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
+  }
+
+  @Post('admin-register')
+  @ApiOperation({ summary: 'Register an admin account (secret)', description: 'Requires x-admin-secret header' })
+  @ApiHeader({ name: 'x-admin-secret', required: true, description: 'Admin secret key' })
+  @ApiBody({ type: RegisterDto })
+  @ApiResponse({ status: 201, description: 'Admin registered successfully' })
+  @ApiResponse({ status: 403, description: 'Invalid admin secret' })
+  async adminRegister(@Body() dto: RegisterDto, @Headers('x-admin-secret') secret: string) {
+    const expected = process.env.ADMIN_SECRET;
+    if (!secret || secret !== expected) {
+      throw new ForbiddenException('Invalid admin secret');
+    }
+    return this.authService.register({ ...dto, role: 'admin' });
   }
 
   @Post('login')
