@@ -33,19 +33,22 @@ export class InterviewsController {
   }
 
   @Get('my')
-  @ApiOperation({ summary: 'List my interviews', description: 'Returns interviews for the authenticated user (as candidate or interviewer)' })
+  @ApiOperation({ summary: 'List my interviews', description: 'Returns interviews for the authenticated user. Admin sees all interviews.' })
   @ApiResponse({ status: 200, description: 'User\'s interviews' })
   findMy(@Req() req: any) {
+    if (req.user.role === 'admin') {
+      return this.interviewsService.findAll();
+    }
     return this.interviewsService.findByUser(req.user.userId);
   }
 
   @Get('analytics')
-  @ApiOperation({ summary: 'Get analytics', description: 'Returns total interviews, completed count, and average score' })
+  @ApiOperation({ summary: 'Get analytics', description: 'Returns scoped analytics. Admin/interviewer see global stats, candidate sees own stats with avg score.' })
   @ApiResponse({ status: 200, description: 'Analytics data', schema: {
-    example: { total: 25, completed: 18, averageScore: 7.2 },
+    example: { total: 25, completed: 18, ongoing: 7, avgScore: 7.2 },
   }})
-  getAnalytics() {
-    return this.interviewsService.getAnalytics();
+  getAnalytics(@Req() req: any) {
+    return this.interviewsService.getAnalytics(req.user.userId, req.user.role);
   }
 
   @Get(':id')

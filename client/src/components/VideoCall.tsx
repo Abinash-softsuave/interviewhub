@@ -5,9 +5,9 @@ interface Props {
   socket: Socket;
   interviewId: string;
   userId?: string;
-  onRecordingUrl?: (url: string) => void;
   userRole?: string;
   onScreenStream?: (stream: MediaStream | null) => void;
+  screenStream?: MediaStream | null;
 }
 
 const ICE_SERVERS: RTCConfiguration = {
@@ -33,7 +33,7 @@ const ICE_SERVERS: RTCConfiguration = {
   ],
 };
 
-export default function VideoCall({ socket, interviewId, userId, onRecordingUrl, userRole, onScreenStream }: Props) {
+export default function VideoCall({ socket, interviewId, userId, userRole, onScreenStream, screenStream }: Props) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
@@ -42,6 +42,8 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
   const screenStreamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animFrameRef = useRef<number>(0);
   const pendingIceCandidates = useRef<RTCIceCandidateInit[]>([]);
   const pendingScreenIceCandidates = useRef<RTCIceCandidateInit[]>([]);
 
@@ -49,6 +51,8 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
   onScreenStreamRef.current = onScreenStream;
   const userRoleRef = useRef(userRole);
   userRoleRef.current = userRole;
+  const screenStreamPropRef = useRef(screenStream);
+  screenStreamPropRef.current = screenStream;
 
   const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -344,17 +348,126 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
     }
   };
 
+  // ---- Composite recording (interviewer only) ----
+  // Composites: candidate screen (full) + candidate camera (PiP) + both audio tracks
   const startRecording = () => {
-    if (!localStreamRef.current) return;
+    const remoteVideo = remoteVideoRef.current;
+    const currentScreenStream = screenStreamPropRef.current;
+
+    // We need at least the remote video (candidate camera)
+    if (!remoteVideo || !remoteVideo.srcObject) return;
+
+    const canvas = document.createElement('canvas');
+    canvasRef.current = canvas;
+    const ctx = canvas.getContext('2d')!;
+
+    // Create a hidden video element for the screen stream
+    let screenVideo: HTMLVideoElement | null = null;
+    if (currentScreenStream) {
+      screenVideo = document.createElement('video');
+      screenVideo.srcObject = currentScreenStream;
+      screenVideo.muted = true;
+      screenVideo.playsInline = true;
+      screenVideo.play();
+    }
+
+    // Canvas size: 1280x720
+    canvas.width = 1280;
+    canvas.height = 720;
+
+    // Draw loop
+    const draw = () => {
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // If screen share is active, draw it as the main content
+      const activeScreenStream = screenStreamPropRef.current;
+      if (screenVideo && activeScreenStream) {
+        // Update source if stream changed
+        if (screenVideo.srcObject !== activeScreenStream) {
+          screenVideo.srcObject = activeScreenStream;
+          screenVideo.play();
+        }
+        // Draw screen share filling the canvas (maintain aspect ratio)
+        const sw = screenVideo.videoWidth || canvas.width;
+        const sh = screenVideo.videoHeight || canvas.height;
+        const scale = Math.min(canvas.width / sw, canvas.height / sh);
+        const dw = sw * scale;
+        const dh = sh * scale;
+        const dx = (canvas.width - dw) / 2;
+        const dy = (canvas.height - dh) / 2;
+        ctx.drawImage(screenVideo, dx, dy, dw, dh);
+
+        // Draw candidate camera as PiP (bottom-right, 240x180)
+        const pipW = 240;
+        const pipH = 180;
+        const pipX = canvas.width - pipW - 16;
+        const pipY = canvas.height - pipH - 16;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(pipX - 2, pipY - 2, pipW + 4, pipH + 4);
+        ctx.drawImage(remoteVideo, pipX, pipY, pipW, pipH);
+      } else {
+        // No screen share — draw candidate camera as main content
+        const vw = remoteVideo.videoWidth || canvas.width;
+        const vh = remoteVideo.videoHeight || canvas.height;
+        const scale = Math.min(canvas.width / vw, canvas.height / vh);
+        const dw = vw * scale;
+        const dh = vh * scale;
+        const dx = (canvas.width - dw) / 2;
+        const dy = (canvas.height - dh) / 2;
+        ctx.drawImage(remoteVideo, dx, dy, dw, dh);
+      }
+
+      animFrameRef.current = requestAnimationFrame(draw);
+    };
+    draw();
+
+    // Mix audio: candidate audio (from remote stream) + interviewer audio (from local stream)
+    const audioCtx = new AudioContext();
+    const destination = audioCtx.createMediaStreamDestination();
+
+    const remoteStream = remoteVideo.srcObject as MediaStream;
+    const remoteAudioTracks = remoteStream.getAudioTracks();
+    if (remoteAudioTracks.length > 0) {
+      const remoteSource = audioCtx.createMediaStreamSource(new MediaStream(remoteAudioTracks));
+      remoteSource.connect(destination);
+    }
+
+    if (localStreamRef.current) {
+      const localAudioTracks = localStreamRef.current.getAudioTracks();
+      if (localAudioTracks.length > 0) {
+        const localSource = audioCtx.createMediaStreamSource(new MediaStream(localAudioTracks));
+        localSource.connect(destination);
+      }
+    }
+
+    // Combine canvas video track + mixed audio track
+    const canvasStream = canvas.captureStream(30);
+    const combinedStream = new MediaStream([
+      ...canvasStream.getVideoTracks(),
+      ...destination.stream.getAudioTracks(),
+    ]);
+
     chunksRef.current = [];
-    const recorder = new MediaRecorder(localStreamRef.current, { mimeType: 'video/webm' });
+    const recorder = new MediaRecorder(combinedStream, { mimeType: 'video/webm' });
     recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
     recorder.onstop = () => {
+      cancelAnimationFrame(animFrameRef.current);
+      audioCtx.close();
+      if (screenVideo) { screenVideo.pause(); screenVideo.srcObject = null; }
+      canvasRef.current = null;
+
       const blob = new Blob(chunksRef.current, { type: 'video/webm' });
       const url = URL.createObjectURL(blob);
-      onRecordingUrl?.(url);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `interview-${interviewId}-${Date.now()}.webm`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     };
-    recorder.start();
+    recorder.start(1000);
     recorderRef.current = recorder;
     setIsRecording(true);
   };
@@ -407,22 +520,24 @@ export default function VideoCall({ socket, interviewId, userId, onRecordingUrl,
           </svg>
         </button>
         {userRole === 'interviewer' && (
-          <button
-            onClick={toggleVideo}
-            className={`p-2 rounded-full ${isVideoOff ? 'bg-red-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}`}
-            title={isVideoOff ? 'Turn on camera' : 'Turn off camera'}
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-          </button>
+          <>
+            <button
+              onClick={toggleVideo}
+              className={`p-2 rounded-full ${isVideoOff ? 'bg-red-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}`}
+              title={isVideoOff ? 'Turn on camera' : 'Turn off camera'}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            </button>
+            <button
+              onClick={isRecording ? stopRecording : startRecording}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}`}
+            >
+              {isRecording ? 'Stop Rec' : 'Record'}
+            </button>
+          </>
         )}
-        <button
-          onClick={isRecording ? stopRecording : startRecording}
-          className={`px-3 py-1.5 rounded-full text-xs font-medium ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}`}
-        >
-          {isRecording ? 'Stop Rec' : 'Record'}
-        </button>
       </div>
     </div>
   );

@@ -146,12 +146,6 @@ export default function InterviewRoom() {
     }
   }, [screenStream]);
 
-  const handleRecordingUrl = async (url: string) => {
-    if (id) {
-      await updateInterview(id, { recordingUrl: url });
-    }
-  };
-
   // Loading state
   if (loading || !socket || !id) {
     return (
@@ -272,7 +266,7 @@ export default function InterviewRoom() {
         {/* Left panel - Video */}
         <div className="w-80 border-r border-gray-200 dark:border-gray-700 flex flex-col">
           <div className="p-3 flex-shrink-0">
-            <VideoCall socket={socket} interviewId={id} userId={user?.id || user?._id} onRecordingUrl={handleRecordingUrl} userRole={user?.role} onScreenStream={handleScreenStream} />
+            <VideoCall socket={socket} interviewId={id} userId={user?.id || user?._id} userRole={user?.role} onScreenStream={handleScreenStream} screenStream={screenStream} />
           </div>
           {/* Chat below video */}
           <div className="flex-1 min-h-0 p-3 pt-0">

@@ -100,12 +100,12 @@ export default function Dashboard() {
     <div className="max-w-7xl mx-auto px-4 py-8">
       {/* Analytics Cards */}
       {analytics && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div className={`grid grid-cols-1 sm:grid-cols-2 ${user?.role === 'candidate' ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} gap-4 mb-8`}>
           {[
             { label: 'Total Interviews', value: analytics.total, color: 'text-primary-600' },
             { label: 'Completed', value: analytics.completed, color: 'text-green-600' },
             { label: 'In Progress', value: analytics.ongoing, color: 'text-yellow-600' },
-            { label: 'Avg Score', value: analytics.avgScore ? `${analytics.avgScore}/10` : 'N/A', color: 'text-purple-600' },
+            ...(user?.role === 'candidate' ? [{ label: 'Avg Score', value: analytics.avgScore ? `${analytics.avgScore}/10` : 'N/A', color: 'text-purple-600' }] : []),
           ].map((stat) => (
             <div key={stat.label} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-5">
               <div className="text-sm text-gray-500 dark:text-gray-400">{stat.label}</div>
