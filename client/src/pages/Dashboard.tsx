@@ -12,6 +12,8 @@ export default function Dashboard() {
   const [candidates, setCandidates] = useState<User[]>([]);
   const [interviewers, setInterviewers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Create form state
   const [form, setForm] = useState({
@@ -48,6 +50,7 @@ export default function Dashboard() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    setCreating(true);
     try {
       await createInterview({
         ...form,
@@ -58,16 +61,21 @@ export default function Dashboard() {
       loadData();
     } catch (err: any) {
       alert(err.response?.data?.message || 'Failed to create interview');
+    } finally {
+      setCreating(false);
     }
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this interview?')) return;
+    setDeletingId(id);
     try {
       await deleteInterview(id);
       loadData();
     } catch (err: any) {
       alert(err.response?.data?.message || 'Failed to delete');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -174,8 +182,13 @@ export default function Dashboard() {
               />
             </div>
             <div className="md:col-span-2">
-              <button type="submit" className="px-6 py-2 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700 text-sm">
-                Create Interview
+              <button type="submit" disabled={creating} className="px-6 py-2 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                {creating ? (
+                  <span className="flex items-center">
+                    <span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2" />
+                    Creating...
+                  </span>
+                ) : 'Create Interview'}
               </button>
             </div>
           </form>
@@ -248,9 +261,15 @@ export default function Dashboard() {
                   {user?.role === 'interviewer' && (
                     <button
                       onClick={() => handleDelete(interview._id)}
-                      className="px-3 py-1.5 text-sm bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-100 font-medium"
+                      disabled={deletingId === interview._id}
+                      className="px-3 py-1.5 text-sm bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-100 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      Delete
+                      {deletingId === interview._id ? (
+                        <span className="flex items-center">
+                          <span className="animate-spin w-3 h-3 border-2 border-red-500 border-t-transparent rounded-full mr-1" />
+                          Deleting...
+                        </span>
+                      ) : 'Delete'}
                     </button>
                   )}
                 </div>

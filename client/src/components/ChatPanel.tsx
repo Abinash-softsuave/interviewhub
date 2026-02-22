@@ -13,6 +13,7 @@ export default function ChatPanel({ socket, interviewId }: Props) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -31,8 +32,9 @@ export default function ChatPanel({ socket, interviewId }: Props) {
 
   const send = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || !user) return;
+    if (!input.trim() || !user || sending) return;
 
+    setSending(true);
     socket.emit('chat-message', {
       interviewId,
       senderId: user.id || user._id,
@@ -40,6 +42,7 @@ export default function ChatPanel({ socket, interviewId }: Props) {
       message: input.trim(),
     });
     setInput('');
+    setTimeout(() => setSending(false), 300);
   };
 
   return (
@@ -81,7 +84,8 @@ export default function ChatPanel({ socket, interviewId }: Props) {
         />
         <button
           type="submit"
-          className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+          disabled={sending}
+          className="px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Send
         </button>

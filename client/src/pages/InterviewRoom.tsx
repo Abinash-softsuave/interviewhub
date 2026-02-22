@@ -24,6 +24,8 @@ export default function InterviewRoom() {
   const [waitingApproval, setWaitingApproval] = useState(false);
   const [joinRejected, setJoinRejected] = useState(false);
   const [joinRequest, setJoinRequest] = useState<{ userId: string; userName: string; socketId: string } | null>(null);
+  const [admitting, setAdmitting] = useState(false);
+  const [declining, setDeclining] = useState(false);
 
   useEffect(() => {
     if (!id || !user) return;
@@ -111,22 +113,26 @@ export default function InterviewRoom() {
 
   const handleApprove = () => {
     if (socket && id && joinRequest) {
+      setAdmitting(true);
       socket.emit('approve-join', {
         interviewId: id,
         candidateSocketId: joinRequest.socketId,
         candidateUserId: joinRequest.userId,
       });
       setJoinRequest(null);
+      setAdmitting(false);
     }
   };
 
   const handleReject = () => {
     if (socket && id && joinRequest) {
+      setDeclining(true);
       socket.emit('reject-join', {
         interviewId: id,
         candidateSocketId: joinRequest.socketId,
       });
       setJoinRequest(null);
+      setDeclining(false);
     }
   };
 
@@ -245,15 +251,17 @@ export default function InterviewRoom() {
           <div className="flex items-center space-x-2">
             <button
               onClick={handleReject}
-              className="px-4 py-1.5 text-sm font-medium text-red-600 bg-red-100 dark:bg-red-900/30 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors"
+              disabled={declining || admitting}
+              className="px-4 py-1.5 text-sm font-medium text-red-600 bg-red-100 dark:bg-red-900/30 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Decline
+              {declining ? 'Declining...' : 'Decline'}
             </button>
             <button
               onClick={handleApprove}
-              className="px-4 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors"
+              disabled={admitting || declining}
+              className="px-4 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Admit
+              {admitting ? 'Admitting...' : 'Admit'}
             </button>
           </div>
         </div>
